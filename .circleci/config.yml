@@ -23,7 +23,7 @@ jobs:
       - run:
           name: yarn build
           command: |
-            export __BUILD_VERSION=$(cat versio.txt)
+            export __BUILD_VERSION=$(cat version.txt)
 
             if [ -z "$__BUILD_VERSION" ]
             then
