@@ -1,0 +1,113 @@
+version: 2.1
+
+orbs:
+  heroku: circleci/heroku@1.2.2
+
+jobs:
+  prepare-dependencies:
+    docker:
+      - image: node:current-alpine
+    steps:
+      - checkout
+      - run:
+          name: Compute version number
+          command: echo "0.0.${CIRCLE_BUILD_NUM}-${CIRCLE_SHA1:0:7}" | tee version.txt
+      - restore_cache:
+          keys:
+            - yarn-deps-{{ checksum "yarn.lock" }}
+            - yarn-deps
+      - run:
+          name: yarn install
+          command: yarn install
+      - save_cache:
+          paths:
+            - node_modules
+          key: yarn-deps-{{ checksum "yarn.lock" }}-{{ epoch }}
+      - persist_to_workspace:
+          root: .
+          paths:
+            - .
+
+  build:
+    docker:
+      - image: node:current-alpine
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: yarn build
+          command: |
+            export __BUILD_VERSION=$(cat version.txt)
+
+            if [ -z "$__BUILD_VERSION" ]
+            then
+              echo Build version is not specified.
+              exit 1
+            fi
+
+            yarn build
+      - store_artifacts:
+          path: dist/server.js
+      - persist_to_workspace:
+          root: .
+          paths:
+            - .
+
+  unit-tests:
+    docker:
+      - image: node:current-alpine
+    parallelism: 2
+    resource_class: large
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Run tests
+          command: |
+            circleci tests glob '**/*.test.ts' | circleci tests split --split-by timings | xargs yarn test:ci
+      - store_artifacts:
+          path: test-results
+      - store_test_results:
+          path: test-results
+
+  deploy-heroku:
+    machine:
+      image: ubuntu-2004:202008-01
+      docker_layer_caching: true
+    environment:
+      HEROKU_APP_NAME: docker-cci
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Recall version number
+          command: cat version.txt
+      - heroku/install
+      - heroku/push-docker-image:
+          recursive: true
+      - heroku/release-docker-image
+
+workflows:
+  version: 2
+
+  run:
+    jobs:
+      - prepare-dependencies
+      - build:
+          requires:
+            - prepare-dependencies
+      - unit-tests:
+          requires:
+            - prepare-dependencies
+      - wait-deploy-approval:
+          type: approval
+          requires:
+            - build
+            - unit-tests
+          filters:
+            branches:
+              only: main
+      - deploy-heroku:
+          requires:
+            - wait-deploy-approval
+          context: heroku
