@@ -1,7 +1,7 @@
 version: 2
 
 jobs:
-  build:
+  prepare-dependencies:
     docker:
       - image: node:current-alpine
     steps:
@@ -20,6 +20,17 @@ jobs:
           paths:
             - node_modules
           key: yarn-deps-{{ checksum "yarn.lock" }}-{{ epoch }}
+      - persist_to_workspace:
+          root: .
+          paths:
+            - .
+
+  build:
+    docker:
+      - image: node:current-alpine
+    steps:
+      - attach_workspace:
+          at: .
       - run:
           name: yarn build
           command: |
@@ -34,3 +45,33 @@ jobs:
             yarn build
       - store_artifacts:
           path: dist/server.js
+
+  unit-tests:
+    docker:
+      - image: node:current-alpine
+    parallelism: 2
+    resource_class: large
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: Run tests
+          command: |
+            circleci tests glob '**/*.test.ts' | circleci tests split --split-by timings | xargs yarn test:ci
+      - store_artifacts:
+          path: test-results
+      - store_test_results:
+          path: test-results
+
+workflows:
+  version: 2
+
+  run:
+    jobs:
+      - prepare-dependencies
+      - build:
+          requires:
+            - prepare-dependencies
+      - unit-tests:
+          requires:
+            - prepare-dependencies
